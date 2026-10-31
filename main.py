@@ -51,6 +51,10 @@ class OthelloGUI:
     WHITE = "#FFFFFF"
     LEGAL = "#8FE3B5"
 
+    ROULETTE_FRAME_MS = 33
+    ROULETTE_FRAMES = 30
+    ROULETTE_REVOLUTIONS = 6
+
     DIFFICULTIES = [
         ("かんたん", ai_easy, "もっとも標準的"),
         ("ふつう", ai_normal, "意外と難しい"),
@@ -68,6 +72,8 @@ class OthelloGUI:
 
         self.ai = ai_normal
         self.difficulty_name = "ふつう"
+        self.human_color = self.ai.BLACK
+        self.ai_color = self.ai.WHITE
 
         self.board = None
         self.current_player = None
@@ -92,6 +98,11 @@ class OthelloGUI:
         self.home_logo_image = None
         self.confetti_particles = []
         self.confetti_after_id = None
+        self.roulette_data = None
+        self.roulette_after_id = None
+        self.roulette_ticks = 0
+        self.roulette_start_angle = 0.0
+        self.roulette_target_angle = 0.0
 
         self.difficulty_buttons = {}
 
@@ -161,7 +172,8 @@ class OthelloGUI:
             "message_after_id",
             "ai_after_id",
             "pass_after_id",
-            "confetti_after_id"
+            "confetti_after_id",
+            "roulette_after_id"
         ):
 
             task_id = getattr(self, attr)
@@ -176,9 +188,12 @@ class OthelloGUI:
                 setattr(self, attr, None)
 
         self.pass_overlay_data = None
+        self.roulette_data = None
+        self.roulette_ticks = 0
         self.confetti_particles = []
         if self.canvas is not None:
             self.canvas.delete("confetti")
+            self.canvas.delete("roulette_overlay")
 
     def clear_ai_queue(self):
 
@@ -400,7 +415,7 @@ class OthelloGUI:
 
         self.create_label(
             container,
-            "YOU : BLACK     VS     AI : WHITE",
+            "ルーレットで先手・後手を決定します",
             size=11,
             weight="bold",
             color=self.SUBTEXT
@@ -584,13 +599,14 @@ class OthelloGUI:
             pady=10
         )
 
-        self.create_label(
+        self.black_role_label = self.create_label(
             black_box,
             "●  BLACK",
             size=12,
             weight="bold",
             color=self.SUBTEXT
-        ).pack()
+        )
+        self.black_role_label.pack()
 
         self.black_score = self.create_label(
             black_box,
@@ -650,13 +666,14 @@ class OthelloGUI:
             pady=10
         )
 
-        self.create_label(
+        self.white_role_label = self.create_label(
             white_box,
             "○  WHITE",
             size=12,
             weight="bold",
             color=self.SUBTEXT
-        ).pack()
+        )
+        self.white_role_label.pack()
 
         self.white_score = self.create_label(
             white_box,
@@ -789,7 +806,7 @@ class OthelloGUI:
 
                 elif (
                     (row, col) in legal_moves
-                    and self.current_player == self.ai.BLACK
+                    and self.current_player == self.human_color
                 ):
 
                     radius = max(
@@ -824,14 +841,14 @@ class OthelloGUI:
 
         elif self.is_waiting:
 
-            if self.current_player == self.ai.WHITE:
+            if self.current_player == self.ai_color:
                 turn = "◉ AI 思考中..."
             else:
                 turn = "◉ 処理中..."
 
             color = self.PRIMARY
 
-        elif self.current_player == self.ai.BLACK:
+        elif self.current_player == self.human_color:
 
             turn = "● あなたの番"
             color = self.PRIMARY
@@ -854,6 +871,8 @@ class OthelloGUI:
 
         if self.game_over:
             self.render_result_overlay()
+        elif self.roulette_data:
+            self.render_roulette_overlay()
         elif self.pass_overlay_data:
             self.render_pass_overlay()
 
@@ -903,7 +922,7 @@ class OthelloGUI:
 
         self.hide_pass_overlay()
 
-        if player == self.ai.BLACK:
+        if player == self.human_color:
 
             subtitle = "あなたの番はスキップされました"
             color = self.OVERLAY_ACCENT
@@ -1071,6 +1090,20 @@ class OthelloGUI:
     # Game Management
     # ======================================
 
+    def update_color_role_labels(self):
+
+        if not hasattr(self, "black_role_label"):
+            return
+
+        black_role = "あなた" if self.human_color == self.ai.BLACK else "AI"
+        white_role = "あなた" if self.human_color == self.ai.WHITE else "AI"
+        self.black_role_label.configure(
+            text=f"●  BLACK（{black_role}）"
+        )
+        self.white_role_label.configure(
+            text=f"○  WHITE（{white_role}）"
+        )
+
     def restart_game(self):
 
         self.game_token += 1
@@ -1079,22 +1112,195 @@ class OthelloGUI:
         self.clear_ai_queue()
 
         self.board = self.ai.init_board()
-
         self.current_player = self.ai.BLACK
 
         self.game_over = False
-        self.is_waiting = False
+        self.is_waiting = True
         self.ai_turn_active = False
 
         self.hide_result_overlay()
+        self.roulette_ticks = 0
+        self.roulette_start_angle = random.uniform(0, 360)
+        self.roulette_target_angle = (
+            self.roulette_start_angle
+            + 360 * self.ROULETTE_REVOLUTIONS
+            + random.uniform(0, 360)
+        )
+        self.roulette_data = {
+            "angle": self.roulette_start_angle,
+            "text": "回転中…"
+        }
 
         self.status_label.configure(
-            text="置ける場所を選択してください。",
+            text="先手・後手をルーレットで決定します。",
             text_color=self.SUBTEXT
         )
 
         self.draw_board()
+        self.roulette_after_id = self.root.after(
+            self.ROULETTE_FRAME_MS,
+            self.advance_turn_roulette
+        )
 
+    def advance_turn_roulette(self):
+
+        self.roulette_after_id = None
+        if self.roulette_data is None or self.game_frame is None:
+            return
+
+        self.roulette_ticks += 1
+        progress = min(
+            self.roulette_ticks / self.ROULETTE_FRAMES,
+            1.0
+        )
+        eased_progress = 1 - (1 - progress) ** 3
+        angle = self.roulette_start_angle + (
+            self.roulette_target_angle - self.roulette_start_angle
+        ) * eased_progress
+
+        if progress < 1.0:
+            self.roulette_data = {"angle": angle, "text": "回転中…"}
+            self.render_roulette_overlay()
+            self.roulette_after_id = self.root.after(
+                self.ROULETTE_FRAME_MS,
+                self.advance_turn_roulette
+            )
+            return
+
+        final_angle = self.roulette_target_angle % 360
+        pointer_angle = 90
+        human_has_black = (pointer_angle - final_angle) % 360 < 180
+        self.human_color = (
+            self.ai.BLACK if human_has_black else self.ai.WHITE
+        )
+        self.ai_color = (
+            self.ai.WHITE
+            if self.human_color == self.ai.BLACK
+            else self.ai.BLACK
+        )
+        self.update_color_role_labels()
+
+        result = "黒（先手）" if human_has_black else "白（後手）"
+        self.roulette_data = {
+            "angle": self.roulette_target_angle,
+            "text": result
+        }
+        self.render_roulette_overlay()
+        self.roulette_after_id = self.root.after(
+            700,
+            self.finish_turn_roulette
+        )
+
+    def render_roulette_overlay(self):
+
+        if self.canvas is None or self.roulette_data is None:
+            return
+
+        self.canvas.delete("roulette_overlay")
+        cx = self.canvas.winfo_width() // 2
+        cy = self.canvas.winfo_height() // 2
+        radius = 130
+        angle = self.roulette_data["angle"] % 360
+        x1 = cx - radius
+        y1 = cy - radius
+        x2 = cx + radius
+        y2 = cy + radius
+
+        self.canvas.create_text(
+            cx,
+            cy - radius - 44,
+            text="先手・後手ルーレット",
+            font=("Arial", 18, "bold"),
+            fill=self.OVERLAY_TEXT,
+            tags="roulette_overlay"
+        )
+
+        # A raised rim and two colored half-circle sectors form the wheel.
+        self.canvas.create_oval(
+            x1 - 8, y1 - 8, x2 + 8, y2 + 8,
+            fill=self.OVERLAY_SHADOW,
+            outline="#6B7280",
+            width=2,
+            tags="roulette_overlay"
+        )
+        self.canvas.create_arc(
+            x1, y1, x2, y2,
+            start=angle,
+            extent=180,
+            style=tk.PIESLICE,
+            fill=self.OVERLAY_ACCENT,
+            outline=self.OVERLAY_TEXT,
+            width=3,
+            tags="roulette_overlay"
+        )
+        self.canvas.create_arc(
+            x1, y1, x2, y2,
+            start=angle + 180,
+            extent=180,
+            style=tk.PIESLICE,
+            fill=self.OVERLAY_BG,
+            outline=self.OVERLAY_TEXT,
+            width=3,
+            tags="roulette_overlay"
+        )
+
+        for label, label_angle, color in (
+            ("黒（先手）", angle + 90, "#000000"),
+            ("白（後手）", angle + 270, "#000000"),
+        ):
+            radians = math.radians(label_angle)
+            label_x = cx + radius * 0.55 * math.cos(radians)
+            label_y = cy - radius * 0.55 * math.sin(radians)
+            self.canvas.create_text(
+                label_x,
+                label_y,
+                text=label,
+                font=("Arial", 12, "bold"),
+                fill=color,
+                angle=angle,
+                tags="roulette_overlay"
+            )
+
+        # The pointer stays fixed while the wheel spins beneath it.
+        self.canvas.create_polygon(
+            cx, cy - radius + 8,
+            cx - 14, cy - radius - 20,
+            cx + 14, cy - radius - 20,
+            fill=self.OVERLAY_ACCENT,
+            outline=self.OVERLAY_TEXT,
+            width=2,
+            tags="roulette_overlay"
+        )
+        self.canvas.create_oval(
+            cx - 18, cy - 18, cx + 18, cy + 18,
+            fill=self.OVERLAY_SHADOW,
+            outline=self.OVERLAY_TEXT,
+            width=3,
+            tags="roulette_overlay"
+        )
+        self.canvas.create_text(
+            cx,
+            cy + radius + 40,
+            text=self.roulette_data["text"],
+            font=("Arial", 18, "bold"),
+            fill="#000000",
+            tags="roulette_overlay"
+        )
+        self.canvas.tag_raise("roulette_overlay")
+
+    def finish_turn_roulette(self):
+
+        self.roulette_after_id = None
+        if self.roulette_data is None or self.game_frame is None:
+            return
+
+        self.roulette_data = None
+        self.is_waiting = False
+        self.status_label.configure(
+            text="置ける場所を選択してください。",
+            text_color=self.SUBTEXT
+        )
+        self.draw_board()
         self.check_turn_and_run()
 
     # ======================================
@@ -1104,7 +1310,7 @@ class OthelloGUI:
     def click(self, event):
 
         if (
-            self.current_player != self.ai.BLACK
+            self.current_player != self.human_color
             or self.game_over
             or self.is_waiting
             or self.board is None
@@ -1125,7 +1331,7 @@ class OthelloGUI:
 
         legal_moves = self.ai.get_legal_moves(
             self.board,
-            self.ai.BLACK
+            self.human_color
         )
 
         if (row, col) not in legal_moves:
@@ -1135,13 +1341,13 @@ class OthelloGUI:
             self.board,
             row,
             col,
-            self.ai.BLACK
+            self.human_color
         )
 
         if result is not None and not isinstance(result, bool):
             self.board = result
 
-        self.current_player = self.ai.WHITE
+        self.current_player = self.ai_color
         self.is_waiting = True
 
         self.draw_board()
@@ -1160,7 +1366,7 @@ class OthelloGUI:
         if (
             self.game_over
             or self.board is None
-            or self.current_player != self.ai.WHITE
+            or self.current_player != self.ai_color
             or not self.ai_turn_active
         ):
             return
@@ -1177,7 +1383,7 @@ class OthelloGUI:
 
                 move = self.ai.select_ai_move(
                     board_snapshot,
-                    self.ai.WHITE
+                    self.ai_color
                 )
 
                 self.ai_queue.put(
@@ -1247,7 +1453,7 @@ class OthelloGUI:
 
         if (
             self.game_over
-            or self.current_player != self.ai.WHITE
+            or self.current_player != self.ai_color
             or not self.ai_turn_active
         ):
             return
@@ -1262,13 +1468,13 @@ class OthelloGUI:
                 self.board,
                 row,
                 col,
-                self.ai.WHITE
+                self.ai_color
             )
 
             if result is not None and not isinstance(result, bool):
                 self.board = result
 
-        self.current_player = self.ai.BLACK
+        self.current_player = self.human_color
         self.is_waiting = False
 
         self.draw_board()
@@ -1301,12 +1507,12 @@ class OthelloGUI:
 
         human_moves = self.ai.get_legal_moves(
             self.board,
-            self.ai.BLACK
+            self.human_color
         )
 
         ai_moves = self.ai.get_legal_moves(
             self.board,
-            self.ai.WHITE
+            self.ai_color
         )
 
         # Game over
@@ -1324,7 +1530,7 @@ class OthelloGUI:
 
         # AI turn
 
-        if self.current_player == self.ai.WHITE:
+        if self.current_player == self.ai_color:
 
             if ai_moves:
 
@@ -1346,19 +1552,19 @@ class OthelloGUI:
                 self.draw_board()
 
                 self.show_pass_overlay(
-                    self.ai.WHITE
+                    self.ai_color
                 )
 
                 self.ai_after_id = self.root.after(
                     1500,
                     lambda: self.resume_after_pass(
-                        self.ai.BLACK
+                        self.human_color
                     )
                 )
 
         # Human turn
 
-        elif self.current_player == self.ai.BLACK:
+        elif self.current_player == self.human_color:
 
             if not human_moves:
 
@@ -1366,13 +1572,13 @@ class OthelloGUI:
                 self.draw_board()
 
                 self.show_pass_overlay(
-                    self.ai.BLACK
+                    self.human_color
                 )
 
                 self.ai_after_id = self.root.after(
                     1500,
                     lambda: self.resume_after_pass(
-                        self.ai.WHITE
+                        self.ai_color
                     )
                 )
 
@@ -1392,13 +1598,18 @@ class OthelloGUI:
 
         black, white = self.ai.count_pieces(self.board)
 
-        player_won = black > white
+        human_count = black if self.human_color == self.ai.BLACK else white
+        ai_count = white if self.ai_color == self.ai.WHITE else black
+        human_stone = "黒" if self.human_color == self.ai.BLACK else "白"
+        ai_stone = "白" if self.ai_color == self.ai.WHITE else "黒"
+
+        player_won = human_count > ai_count
         if player_won:
             result = "YOU WIN!"
-            detail = "プレイヤー（黒）の勝利です。"
-        elif white > black:
+            detail = f"プレイヤー（{human_stone}）の勝利です。"
+        elif ai_count > human_count:
             result = "AI WINS!"
-            detail = "AI（白）の勝利です。"
+            detail = f"AI（{ai_stone}）の勝利です。"
         else:
             result = "DRAW!"
             detail = "引き分けです。"
@@ -1419,7 +1630,7 @@ class OthelloGUI:
             "score": f"{black} : {white}"
         }
 
-        # Draw the dark panel and orange border in one Canvas shape so both
+        # Draw the panel and accent border in one Canvas shape so both
         # follow the same rounded outline.
         home_button = ctk.CTkButton(
             self.game_frame,
