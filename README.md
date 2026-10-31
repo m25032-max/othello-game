@@ -1,5 +1,4 @@
--#
-python main.py
+# othello-game
 
 ## Installation of CustomTkinter
 ```bash
