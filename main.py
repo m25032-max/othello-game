@@ -2,6 +2,7 @@ import tkinter as tk
 import threading
 import queue
 import math
+import random
 from pathlib import Path
 
 import customtkinter as ctk
@@ -89,6 +90,8 @@ class OthelloGUI:
         self.result_overlay = None
         self.result_overlay_data = None
         self.home_logo_image = None
+        self.confetti_particles = []
+        self.confetti_after_id = None
 
         self.difficulty_buttons = {}
 
@@ -157,7 +160,8 @@ class OthelloGUI:
         for attr in (
             "message_after_id",
             "ai_after_id",
-            "pass_after_id"
+            "pass_after_id",
+            "confetti_after_id"
         ):
 
             task_id = getattr(self, attr)
@@ -172,6 +176,9 @@ class OthelloGUI:
                 setattr(self, attr, None)
 
         self.pass_overlay_data = None
+        self.confetti_particles = []
+        if self.canvas is not None:
+            self.canvas.delete("confetti")
 
     def clear_ai_queue(self):
 
@@ -1385,7 +1392,8 @@ class OthelloGUI:
 
         black, white = self.ai.count_pieces(self.board)
 
-        if black > white:
+        player_won = black > white
+        if player_won:
             result = "YOU WIN!"
             detail = "プレイヤー（黒）の勝利です。"
         elif white > black:
@@ -1442,6 +1450,74 @@ class OthelloGUI:
 
         self.result_overlay = [home_button, replay_button]
         self.render_result_overlay()
+
+        if player_won:
+            self.start_confetti()
+
+    def start_confetti(self):
+
+        if (
+            self.canvas is None
+            or not self.game_over
+            or self.confetti_particles
+        ):
+            return
+
+        width = max(self.canvas.winfo_width(), 1)
+        colors = [
+            "#C2410C", "#FFD166", "#06D6A0",
+            "#118AB2", "#EF476F", "#F8F9FA"
+        ]
+
+        for _ in range(70):
+            self.confetti_particles.append({
+                "x": random.randint(0, width),
+                "y": random.randint(-50, 0),
+                "vx": random.uniform(-2, 2),
+                "vy": random.uniform(1, 4),
+                "color": random.choice(colors),
+                "size": random.randint(4, 8)
+            })
+
+        self.animate_confetti()
+
+    def animate_confetti(self):
+
+        self.confetti_after_id = None
+        if self.canvas is None or not self.game_over:
+            self.confetti_particles = []
+            return
+
+        self.canvas.delete("confetti")
+        height = self.canvas.winfo_height()
+        remaining_particles = []
+
+        for particle in self.confetti_particles:
+            particle["x"] += particle["vx"]
+            particle["y"] += particle["vy"]
+            particle["vy"] += 0.05
+
+            if particle["y"] < height:
+                size = particle["size"]
+                self.canvas.create_rectangle(
+                    particle["x"],
+                    particle["y"],
+                    particle["x"] + size,
+                    particle["y"] + size,
+                    fill=particle["color"],
+                    outline="",
+                    tags="confetti"
+                )
+                remaining_particles.append(particle)
+
+        self.confetti_particles = remaining_particles
+
+        if self.confetti_particles:
+            self.canvas.tag_lower("confetti", "result_overlay")
+            self.confetti_after_id = self.root.after(
+                30,
+                self.animate_confetti
+            )
 
     def render_result_overlay(self):
 
