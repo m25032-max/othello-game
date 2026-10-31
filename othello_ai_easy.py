@@ -6,9 +6,11 @@ WHITE = -1
 EMPTY = 0
 BOARD_SIZE = 8
 
-DX = [-1, -1, 0, 1, 1, 1, 0, -1]
-DY = [1, 0, -1, -1, -1, 0, 1, 1]
+# 正しい8方向ベクトルに修正（重複を無くし、全方向を網羅）
+DX = [-1, 1, 0, 0, -1, -1, 1, 1]
+DY = [0, 0, -1, 1, -1, 1, -1, 1]
 
+# 初期配置
 def init_board():
     board = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=int)
     board[3, 3] = WHITE
@@ -17,11 +19,13 @@ def init_board():
     board[4, 4] = WHITE
     return board
 
+# 合法手の取得
 def get_legal_moves(board, player):
     str_board = _convert_to_str_board(board)
     str_stone = 'B' if player == BLACK else 'W'
     return legal(str_board, str_stone)
 
+# 石を置く
 def make_move(board, row, col, player):
     str_board = _convert_to_str_board(board)
     str_stone = 'B' if player == BLACK else 'W'
@@ -35,17 +39,21 @@ def make_move(board, row, col, player):
                 board[i, j] = WHITE
             else:
                 board[i, j] = EMPTY
+    return board
 
+# 石の数を数える
 def count_pieces(board):
     black_count = np.sum(board == BLACK)
     white_count = np.sum(board == WHITE)
     return black_count, white_count
 
+# AIの手
 def select_ai_move(board, player):
     str_board = _convert_to_str_board(board)
     str_stone = 'B' if player == BLACK else 'W'
     return select_move(str_board, str_stone)
 
+# 勝ち負け判定
 def _convert_to_str_board(board):
     str_board = []
     for i in range(BOARD_SIZE):
@@ -121,6 +129,7 @@ def legal(board, stone):
                 vec_ret.append((i, j))
     return vec_ret
 
+# 石をひっくり返す
 def rev_stone(board, x, y, stone):
     total_rev = 0
     total_mob = 0
@@ -145,6 +154,7 @@ def rev_stone(board, x, y, stone):
 
     return total_rev, total_mob
 
+# 全ての石を数える
 def evaluate(board, stone):
     black = 0
     white = 0
@@ -166,6 +176,7 @@ def evaluate(board, stone):
     else:
         return white, count
 
+# スコアリング関数
 def nega_alpha(board, depth, alpha, beta, stone):
     if depth == 0:
         return evaluate(board, stone)[0]
@@ -190,7 +201,9 @@ def nega_alpha(board, depth, alpha, beta, stone):
 
     return max_score
 
+# 動きの決定
 def select_move(board, stone):
+    import random
     can_move = legal(board, stone)
     if not can_move:
         return None
