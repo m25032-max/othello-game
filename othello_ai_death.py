@@ -7,6 +7,7 @@ DIRECTIONS = [(-1, -1), (-1, 0), (-1, 1),
 
 BOARD_SIZE = 8
 
+# スコアテーブルの作成
 def generate_score_table(size):
     table = np.full((size, size), 3)
     table[0, :] = 5; table[-1, :] = 5; table[:, 0] = 5; table[:, -1] = 5
@@ -28,9 +29,11 @@ def generate_score_table(size):
 SCORE_TABLE = generate_score_table(BOARD_SIZE)
 TRANSPOSITION_TABLE = {}
 
+# ボードの初期化
 def board_to_hash(board):
-    return board.tobytes()
+    return board.tobytes() if board is not None and not isinstance(board, bool) else b""
 
+# ボードの配置
 def init_board():
     board = np.zeros((BOARD_SIZE, BOARD_SIZE), dtype=int)
     mid = BOARD_SIZE // 2
@@ -42,38 +45,53 @@ def init_board():
     TRANSPOSITION_TABLE.clear()
     return board
 
-def in_bounds(x, y):
-    return 0 <= x < BOARD_SIZE and 0 <= y < BOARD_SIZE
+# 画面外チェック
+def in_bounds(row, col):
+    return 0 <= row < BOARD_SIZE and 0 <= col < BOARD_SIZE
 
-def get_flips(board, x, y, player):
-    if board[x, y] != EMPTY:
+# 🛠️ 縦横（row, col）がねじれないよう厳密に修正した挟み込み判定
+def get_flips(board, row, col, player):
+    if board is None or isinstance(board, bool):
+        return []
+    if board[row, col] != EMPTY:
         return []
     flips = []
-    for dx, dy in DIRECTIONS:
-        nx, ny = x + dx, y + dy
+    for drow, dcol in DIRECTIONS:
+        nrow, ncol = row + drow, col + dcol
         line = []
-        while 0 <= nx < 8 and 0 <= ny < 8 and board[nx, ny] == -player:
-            line.append((nx, ny))
-            nx += dx; ny += dy
-        if 0 <= nx < 8 and 0 <= ny < 8 and board[nx, ny] == player and line:
+        while in_bounds(nrow, ncol) and board[nrow, ncol] == -player:
+            line.append((nrow, ncol))
+            nrow += drow; ncol += dcol
+        if in_bounds(nrow, ncol) and board[nrow, ncol] == player and line:
             flips.extend(line)
     return flips
 
+# 合法手の取得：GUI（main.py）へ正しい (row, col) 形式で返す
 def get_legal_moves(board, player):
-    return [(x, y) for x in range(BOARD_SIZE) for y in range(BOARD_SIZE) if get_flips(board, x, y, player)]
+    if board is None or isinstance(board, bool):
+        return []
+    return [(r, c) for r in range(BOARD_SIZE) for c in range(BOARD_SIZE) if get_flips(board, r, c, player)]
 
-def make_move(board, x, y, player):
-    flips = get_flips(board, x, y, player)
+# 🛠️ GUIの仕様に合わせ、元の盤面を直接壊さずに「ひっくり返した後の配列」を返す形に修正
+def make_move(board, row, col, player):
+    if board is None or isinstance(board, bool):
+        return board
+    flips = get_flips(board, row, col, player)
     if not flips:
-        return False
-    board[x, y] = player
-    for fx, fy in flips:
-        board[fx, fy] = player
-    return True
+        return board
 
+    temp_board = board.copy()
+    temp_board[row, col] = player
+    for fr, fc in flips:
+        temp_board[fr, fc] = player
+    return temp_board
+
+# 石の数を数える
 def count_pieces(board):
-    return np.sum(board == BLACK), np.sum(board == WHITE)
-
+    if board is None or isinstance(board, bool):
+        return 0, 0
+    return int(np.sum(board == BLACK)), int(np.sum(board == WHITE))
+# AIの手の評価（安定度・着手可能数・スコアテーブルを統合評価）
 def evaluate_board(board, my_color, my_moves_count, opp_moves_count):
     dynamic_table = SCORE_TABLE.copy()
     corners = [
@@ -82,22 +100,23 @@ def evaluate_board(board, my_color, my_moves_count, opp_moves_count):
         ((-1, 0), [(-1, 1), (-2, 0), (-2, 1)]),
         ((-1, -1), [(-1, -2), (-2, -1), (-2, -2)])
     ]
-    for (cx, cy), neighbors in corners:
-        owner = board[cx, cy]
+    for (cr, cc), neighbors in corners:
+        owner = board[cr, cc]
         if owner != EMPTY:
-            for nx, ny in neighbors:
-                dynamic_table[nx, ny] = 30 if owner == my_color else -100
+            for nr, nc in neighbors:
+                dynamic_table[nr, nc] = 30 if owner == my_color else -100
 
     score = np.sum(board * dynamic_table) * my_color
     score += (my_moves_count - opp_moves_count) * 15
 
     stable_score = 0
-    for cx, cy in [(0, 0), (0, -1), (-1, 0), (-1, -1)]:
-        if board[cx, cy] != EMPTY:
-            stable_score += 50 if board[cx, cy] == my_color else -50
+    for cr, cc in [(0, 0), (0, -1), (-1, 0), (-1, -1)]:
+        if board[cr, cc] != EMPTY:
+            stable_score += 50 if board[cr, cc] == my_color else -50
     score += stable_score
     return score
 
+# AIの手の選択（中盤用：置換表付きAlpha-Beta法）
 def alphabeta(board, depth, alpha, beta, player, my_color, best_move_at_parent=None):
     board_hash = (board_to_hash(board), depth, player)
     if board_hash in TRANSPOSITION_TABLE:
@@ -117,6 +136,7 @@ def alphabeta(board, depth, alpha, beta, player, my_color, best_move_at_parent=N
         score, _ = alphabeta(board, depth - 1, alpha, beta, -player, my_color)
         return score, None
 
+    # 反復深化による親ノードの最善手があれば最優先で探索（枝刈り効率化）
     if best_move_at_parent and best_move_at_parent in legal_moves:
         legal_moves.remove(best_move_at_parent)
         legal_moves.insert(0, best_move_at_parent)
@@ -129,9 +149,8 @@ def alphabeta(board, depth, alpha, beta, player, my_color, best_move_at_parent=N
     if player == my_color:
         best_score = -float('inf')
         for move in legal_moves:
-            temp_board = board.copy()
-            make_move(temp_board, move[0], move[1], player)
-            score, _ = alphabeta(temp_board, depth - 1, alpha, beta, -player, my_color)
+            temp_board = make_move(board, move[0], move[1], player)
+            score, _ = alphabeta(temp_board, depth - 1, alpha, beta, -player, my_color, best_move_at_parent)
             if score > best_score:
                 best_score, best_move = score, move
             alpha = max(alpha, best_score)
@@ -141,9 +160,8 @@ def alphabeta(board, depth, alpha, beta, player, my_color, best_move_at_parent=N
     else:
         best_score = float('inf')
         for move in legal_moves:
-            temp_board = board.copy()
-            make_move(temp_board, move[0], move[1], player)
-            score, _ = alphabeta(temp_board, depth - 1, alpha, beta, -player, my_color)
+            temp_board = make_move(board, move[0], move[1], player)
+            score, _ = alphabeta(temp_board, depth - 1, alpha, beta, -player, my_color, best_move_at_parent)
             if score < best_score:
                 best_score, best_move = score, move
             beta = min(beta, best_score)
@@ -151,12 +169,15 @@ def alphabeta(board, depth, alpha, beta, player, my_color, best_move_at_parent=N
         TRANSPOSITION_TABLE[board_hash] = (original_alpha, beta, best_score, best_move)
         return best_score, best_move
 
+# 終盤用のAIの手の選択（完全読み切りマスカウント評価）
 def endgame_alphabeta(board, alpha, beta, player, my_color):
     legal_moves = get_legal_moves(board, player)
     opponent_moves = get_legal_moves(board, -player)
 
     if not legal_moves and not opponent_moves:
-        my_count, opp_count = count_pieces(board) if my_color == BLACK else count_pieces(board)[::-1]
+        b_cnt, w_cnt = count_pieces(board)
+        my_count = b_cnt if my_color == BLACK else w_cnt
+        opp_count = w_cnt if my_color == BLACK else b_cnt
         return my_count - opp_count, None
 
     if not legal_moves:
@@ -169,8 +190,7 @@ def endgame_alphabeta(board, alpha, beta, player, my_color):
     if player == my_color:
         best_score = -float('inf')
         for move in legal_moves:
-            temp_board = board.copy()
-            make_move(temp_board, move[0], move[1], player)
+            temp_board = make_move(board, move[0], move[1], player)
             score, _ = endgame_alphabeta(temp_board, alpha, beta, -player, my_color)
             if score > best_score:
                 best_score, best_move = score, move
@@ -180,8 +200,7 @@ def endgame_alphabeta(board, alpha, beta, player, my_color):
     else:
         best_score = float('inf')
         for move in legal_moves:
-            temp_board = board.copy()
-            make_move(temp_board, move[0], move[1], player)
+            temp_board = make_move(board, move[0], move[1], player)
             score, _ = endgame_alphabeta(temp_board, alpha, beta, -player, my_color)
             if score < best_score:
                 best_score, best_move = score, move
@@ -189,12 +208,17 @@ def endgame_alphabeta(board, alpha, beta, player, my_color):
             if beta <= alpha: break
         return best_score, best_move
 
+# GUI（main.py）から呼び出されるAIの最善手決定関数（反復深化）
 def select_ai_move(board, player):
+    if board is None or isinstance(board, bool):
+        return None
+
     empty_count = np.sum(board == EMPTY)
     if empty_count <= 10:
         _, best_move = endgame_alphabeta(board, -float('inf'), float('inf'), player, my_color=player)
         return best_move
 
+    # 空きマスに応じて深さを可変（Iterative Deepening）
     target_depth = 5 if empty_count <= 20 else 4
     best_move = None
 
