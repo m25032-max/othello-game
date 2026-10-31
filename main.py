@@ -254,14 +254,6 @@ class OthelloGUI:
 
         # Logo
 
-    #     self.create_label(
-    #       container,
-    #       "OTHELLO",
-    #       size=15,
-    #       weight="bold",
-    #       color=self.PRIMARY
-    #   ).pack(pady=(20, 8))
-
         logo_path = Path(__file__).resolve().with_name("vs_othello_ai_logo.png")
         with Image.open(logo_path) as source_image:
             logo = source_image.convert("RGBA")
