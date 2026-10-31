@@ -1,10 +1,11 @@
-
 import tkinter as tk
 import threading
 import queue
 import math
+from pathlib import Path
 
 import customtkinter as ctk
+from PIL import Image, ImageChops, ImageDraw
 
 import othello_ai_easy as ai_easy
 import othello_ai_normal as ai_normal
@@ -35,6 +36,13 @@ class OthelloGUI:
     SUBTEXT = "#64748B"
     BORDER = "#E2E8F0"
 
+    OVERLAY_BG = "#D0D0D0"
+    OVERLAY_ACCENT = "#d1501b"
+    OVERLAY_ACCENT_HOVER = "#9A3412"
+    OVERLAY_SHADOW = "#A8A8A8"
+    OVERLAY_TEXT = "#1E293B"
+    OVERLAY_SUBTEXT = "#4B5563"
+
     BOARD = "#27845E"
     BOARD_LINE = "#1B6949"
 
@@ -43,10 +51,10 @@ class OthelloGUI:
     LEGAL = "#8FE3B5"
 
     DIFFICULTIES = [
-        ("かんたん", ai_easy, "初心者向け"),
-        ("ふつう", ai_normal, "標準的な難易度"),
-        ("むずかしい", ai_hard, "上級者向け"),
-        ("デス", ai_death, "最高難易度"),
+        ("かんたん", ai_easy, "もっとも標準的"),
+        ("ふつう", ai_normal, "意外と難しい"),
+        ("むずかしい", ai_hard, "自信がある人でも\n負けてしまうことも"),
+        ("デス", ai_death, "常に最善の手を打たないと\n負けてしまう"),
     ]
 
     def __init__(self, root):
@@ -80,6 +88,7 @@ class OthelloGUI:
         self.canvas = None
         self.result_overlay = None
         self.result_overlay_data = None
+        self.home_logo_image = None
 
         self.difficulty_buttons = {}
 
@@ -223,24 +232,46 @@ class OthelloGUI:
 
         # Logo
 
-        self.create_label(
-            container,
-            "REVERSI",
-            size=15,
-            weight="bold",
-            color=self.PRIMARY
-        ).pack(pady=(20, 8))
+    #     self.create_label(
+    #       container,
+    #       "OTHELLO",
+    #       size=15,
+    #       weight="bold",
+    #       color=self.PRIMARY
+    #   ).pack(pady=(20, 8))
 
-        self.create_label(
+        logo_path = Path(__file__).resolve().with_name("vs_othello_ai_logo.png")
+        with Image.open(logo_path) as source_image:
+            logo = source_image.convert("RGBA")
+
+        corner_radius = round(min(logo.size) * 0.11)
+        corner_mask = Image.new("L", logo.size, 0)
+        ImageDraw.Draw(corner_mask).rounded_rectangle(
+            (0, 0, logo.width - 1, logo.height - 1),
+            radius=corner_radius,
+            fill=255
+        )
+        logo.putalpha(
+            ImageChops.multiply(logo.getchannel("A"), corner_mask)
+        )
+
+        display_width = 500
+        display_height = round(display_width * logo.height / logo.width)
+        self.home_logo_image = ctk.CTkImage(
+            light_image=logo,
+            size=(display_width, display_height)
+        )
+        ctk.CTkLabel(
             container,
-            "リバーシ / オセロ",
-            size=34,
-            weight="bold"
+            text="",
+            image=self.home_logo_image,
+            fg_color="transparent",
+            corner_radius=0
         ).pack(pady=5)
 
         self.create_label(
             container,
-            "黒のプレイヤーとして、AIとの対戦を楽しもう。",
+            "部員が作成したオセロAIと対戦!",
             size=14,
             color=self.SUBTEXT
         ).pack(pady=(0, 30))
@@ -294,10 +325,21 @@ class OthelloGUI:
 
         for name, module, description in self.DIFFICULTIES:
 
-            button = ctk.CTkButton(
+            option = ctk.CTkFrame(
                 difficulty_frame,
-                text=f"{name}\n{description}",
-                height=85,
+                fg_color="transparent"
+            )
+            option.pack(
+                side="left",
+                expand=True,
+                fill="x",
+                padx=5
+            )
+
+            button = ctk.CTkButton(
+                option,
+                text=name,
+                height=58,
                 corner_radius=12,
                 border_width=1,
                 border_color=self.BORDER,
@@ -309,12 +351,14 @@ class OthelloGUI:
                     self.select_difficulty_on_home(m, n)
             )
 
-            button.pack(
-                side="left",
-                expand=True,
-                fill="x",
-                padx=5
-            )
+            button.pack(fill="x")
+
+            self.create_label(
+                option,
+                description,
+                size=11,
+                color=self.SUBTEXT
+            ).pack(pady=(6, 0))
 
             self.difficulty_buttons[name] = button
 
@@ -431,7 +475,7 @@ class OthelloGUI:
 
         self.create_label(
             header,
-            "REVERSI",
+            "OTHELLO",
             size=18,
             weight="bold",
             color=self.PRIMARY
@@ -855,12 +899,12 @@ class OthelloGUI:
         if player == self.ai.BLACK:
 
             subtitle = "あなたの番はスキップされました"
-            color = self.PRIMARY
+            color = self.OVERLAY_ACCENT
 
         else:
 
             subtitle = "AIの番はスキップされました"
-            color = "#64748B"
+            color = self.OVERLAY_SUBTEXT
 
         self.pass_overlay_data = {
             "title": "PASS",
@@ -908,7 +952,7 @@ class OthelloGUI:
             y1 + 6,
             x2 + 5,
             y2 + 6,
-            fill="#CBD5E1",
+            fill=self.OVERLAY_SHADOW,
             outline="",
             tags="pass_overlay"
         )
@@ -920,7 +964,8 @@ class OthelloGUI:
             y1,
             x2,
             y2,
-            fill="#FFFFFF",
+            fill=self.OVERLAY_BG,
+            stipple="gray75",
             outline=color,
             width=3,
             tags="pass_overlay"
@@ -955,7 +1000,7 @@ class OthelloGUI:
             cy + 48,
             text=data["subtitle"],
             font=("Arial", 13, "bold"),
-            fill=self.SUBTEXT,
+            fill=self.OVERLAY_SUBTEXT,
             tags="pass_overlay"
         )
 
@@ -1366,50 +1411,48 @@ class OthelloGUI:
             "score": f"{black} : {white}"
         }
 
-        # Draw the white panel and orange border in one Canvas shape so both
+        # Draw the dark panel and orange border in one Canvas shape so both
         # follow the same rounded outline.
-        buttons = ctk.CTkFrame(
+        home_button = ctk.CTkButton(
             self.game_frame,
-            fg_color=self.SURFACE,
-            corner_radius=0
-        )
-        self.result_overlay = buttons
-
-        ctk.CTkButton(
-            buttons,
             text="ホームに戻る",
             width=140,
             height=40,
             corner_radius=10,
-            fg_color=self.SURFACE,
-            hover_color=self.PRIMARY_LIGHT,
-            text_color=self.TEXT,
+            bg_color=self.OVERLAY_BG,
+            fg_color=self.OVERLAY_BG,
+            hover_color="#BDBDBD",
+            text_color=self.OVERLAY_TEXT,
             border_width=1,
-            border_color=self.BORDER,
+            border_color="#9E9E9E",
             command=self.show_home_screen
-        ).pack(side="left", padx=6)
+        )
 
-        ctk.CTkButton(
-            buttons,
+        replay_button = ctk.CTkButton(
+            self.game_frame,
             text="もう一度遊ぶ",
             width=140,
             height=40,
             corner_radius=10,
-            fg_color=self.PRIMARY,
-            hover_color=self.PRIMARY_HOVER,
+            bg_color=self.OVERLAY_BG,
+            fg_color=self.OVERLAY_ACCENT,
+            hover_color=self.OVERLAY_ACCENT_HOVER,
             command=self.restart_game
-        ).pack(side="left", padx=6)
+        )
 
+        self.result_overlay = [home_button, replay_button]
         self.render_result_overlay()
 
     def render_result_overlay(self):
 
         if (
-            self.result_overlay is None
-            or not self.result_overlay.winfo_exists()
+            not self.result_overlay
             or self.canvas is None
             or self.result_overlay_data is None
         ):
+            return
+
+        if not all(button.winfo_exists() for button in self.result_overlay):
             return
 
         self.canvas.delete("result_overlay")
@@ -1444,8 +1487,9 @@ class OthelloGUI:
 
         self.canvas.create_polygon(
             *points,
-            fill=self.SURFACE,
-            outline=self.PRIMARY,
+            fill=self.OVERLAY_BG,
+            stipple="gray75",
+            outline=self.OVERLAY_ACCENT,
             width=3,
             tags="result_overlay"
         )
@@ -1454,7 +1498,7 @@ class OthelloGUI:
             cy - 45,
             text=self.result_overlay_data["result"],
             font=("Arial", 30, "bold"),
-            fill=self.PRIMARY,
+            fill=self.OVERLAY_ACCENT,
             tags="result_overlay"
         )
         self.canvas.create_text(
@@ -1465,18 +1509,24 @@ class OthelloGUI:
                 f"{self.result_overlay_data['score']}"
             ),
             font=("Arial", 14, "bold"),
-            fill=self.TEXT,
+            fill=self.OVERLAY_TEXT,
             tags="result_overlay"
         )
 
         center_x = self.canvas.winfo_x() + cx
-        center_y = self.canvas.winfo_y() + cy + 58
-        self.result_overlay.place(
-            x=center_x,
-            y=center_y,
+        button_y = self.canvas.winfo_y() + cy + 58
+        self.result_overlay[0].place(
+            x=center_x - 76,
+            y=button_y,
             anchor="center"
         )
-        self.result_overlay.lift()
+        self.result_overlay[1].place(
+            x=center_x + 76,
+            y=button_y,
+            anchor="center"
+        )
+        for button in self.result_overlay:
+            button.lift()
 
     def hide_result_overlay(self):
 
@@ -1484,11 +1534,12 @@ class OthelloGUI:
             self.canvas.delete("result_overlay")
 
         if self.result_overlay is not None:
-            try:
-                if self.result_overlay.winfo_exists():
-                    self.result_overlay.destroy()
-            except tk.TclError:
-                pass
+            for widget in self.result_overlay:
+                try:
+                    if widget.winfo_exists():
+                        widget.destroy()
+                except tk.TclError:
+                    pass
             self.result_overlay = None
 
         self.result_overlay_data = None
