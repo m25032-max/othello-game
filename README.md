@@ -1,5 +1,5 @@
--#
-python main.py
+# Othello-game
+For Sangifest.
 
 ## Installation of CustomTkinter
 ```bash
