@@ -1,366 +1,1507 @@
+
 import tkinter as tk
 import threading
+import queue
+import math
+
+import customtkinter as ctk
+
 import othello_ai_easy as ai_easy
 import othello_ai_normal as ai_normal
 import othello_ai_hard as ai_hard
 import othello_ai_death as ai_death
 
-class OthelloGUI:
-    # 色の定義
-    COLOR_ORANGE = "#FF5F1F"
-    COLOR_DARK_ORANGE = "#CC4B14"
 
-    # GUIの初期化コード
+# ==========================================
+# Theme
+# ==========================================
+
+ctk.set_appearance_mode("light")
+ctk.set_default_color_theme("blue")
+
+
+class OthelloGUI:
+
+    # Colors
+    BG = "#F5F7FA"
+    SURFACE = "#FFFFFF"
+    SURFACE_ALT = "#F8FAFC"
+
+    PRIMARY = "#F97316"
+    PRIMARY_HOVER = "#EA580C"
+    PRIMARY_LIGHT = "#FFF1E8"
+
+    TEXT = "#1E293B"
+    SUBTEXT = "#64748B"
+    BORDER = "#E2E8F0"
+
+    BOARD = "#27845E"
+    BOARD_LINE = "#1B6949"
+
+    BLACK = "#17202A"
+    WHITE = "#FFFFFF"
+    LEGAL = "#8FE3B5"
+
+    DIFFICULTIES = [
+        ("かんたん", ai_easy, "初心者向け"),
+        ("ふつう", ai_normal, "標準的な難易度"),
+        ("むずかしい", ai_hard, "上級者向け"),
+        ("デス", ai_death, "最高難易度"),
+    ]
+
     def __init__(self, root):
+
         self.root = root
-        self.root.title("オセロ - 黒（人間） vs 白（AI）")
-        self.cell_size = 60
+        self.root.title("Reversi - Othello")
+        self.root.geometry("1100x780")
+        self.root.minsize(800, 650)
+        self.root.configure(fg_color=self.BG)
+
         self.ai = ai_normal
         self.difficulty_name = "ふつう"
+
         self.board = None
-        self.current_player = self.ai.BLACK
+        self.current_player = None
+
         self.game_over = False
         self.is_waiting = False
+        self.ai_turn_active = False
         self.is_game_started = False
-        self.restart_btn = None
-        self.end_home_btn = None
+
+        self.cell_size = 60
         self.offset_x = 0
         self.offset_y = 0
-        self._current_msg = None
 
-        self.main_frame = tk.Frame(root)
-        self.main_frame.grid(row=0, column=0, sticky="nsew")
-        self.root.rowconfigure(0, weight=1)
-        self.root.columnconfigure(0, weight=1)
+        self.ai_queue = queue.Queue()
+        self.game_token = 0
+
         self.home_frame = None
         self.game_frame = None
         self.canvas = None
-        self.header_frame = None
+        self.result_overlay = None
+        self.result_overlay_data = None
 
-        self.root.geometry(f"{self.cell_size * self.ai.BOARD_SIZE}x{self.cell_size * self.ai.BOARD_SIZE + 90}")
+        self.difficulty_buttons = {}
+
+        self.message_after_id = None
+        self.ai_after_id = None
+        self.pass_after_id = None
+
+        self.pass_overlay_data = None
+
+        self.root.protocol(
+            "WM_DELETE_WINDOW",
+            self.on_close
+        )
+
         self.show_home_screen()
 
-    # ホーム画面のコード
+    # ======================================
+    # Utility
+    # ======================================
+
+    def create_card(self, parent, **kwargs):
+
+        return ctk.CTkFrame(
+            parent,
+            fg_color=self.SURFACE,
+            corner_radius=16,
+            border_width=1,
+            border_color=self.BORDER,
+            **kwargs
+        )
+
+    def create_label(
+        self,
+        parent,
+        text,
+        size=14,
+        weight="normal",
+        color=None,
+        **kwargs
+    ):
+
+        return ctk.CTkLabel(
+            parent,
+            text=text,
+            font=("Arial", size, weight),
+            text_color=color or self.TEXT,
+            **kwargs
+        )
+
+    def clear_frames(self):
+
+        if self.home_frame:
+            self.home_frame.destroy()
+            self.home_frame = None
+
+        if self.game_frame:
+            self.game_frame.destroy()
+            self.game_frame = None
+
+        self.canvas = None
+        self.result_overlay = None
+        self.result_overlay_data = None
+
+    def cancel_scheduled_tasks(self):
+
+        for attr in (
+            "message_after_id",
+            "ai_after_id",
+            "pass_after_id"
+        ):
+
+            task_id = getattr(self, attr)
+
+            if task_id is not None:
+
+                try:
+                    self.root.after_cancel(task_id)
+                except tk.TclError:
+                    pass
+
+                setattr(self, attr, None)
+
+        self.pass_overlay_data = None
+
+    def clear_ai_queue(self):
+
+        while True:
+
+            try:
+                self.ai_queue.get_nowait()
+
+            except queue.Empty:
+                break
+
+    def on_close(self):
+
+        self.game_token += 1
+        self.cancel_scheduled_tasks()
+        self.root.destroy()
+
+    # ======================================
+    # Home Screen
+    # ======================================
+
     def show_home_screen(self):
+
+        self.game_token += 1
+        self.cancel_scheduled_tasks()
+        self.clear_ai_queue()
         self.clear_frames()
+
         self.is_game_started = False
         self.is_waiting = False
         self.game_over = False
-        self.home_frame = tk.Frame(self.main_frame, bg="white")
-        self.home_frame.pack(expand=True, fill="both")
+        self.ai_turn_active = False
 
-        title_label = tk.Label(self.home_frame, text="リバーシ / オセロ", font=("Arial", 26, "bold"), fg=self.COLOR_ORANGE, bg="white")
-        title_label.pack(pady=(50, 10))
-        subtitle_label = tk.Label(self.home_frame, text="黒（人間） vs 白（AI）", font=("Arial", 13, "bold"), fg=self.COLOR_ORANGE, bg="white")
-        subtitle_label.pack(pady=(0, 40))
-        diff_frame = tk.Frame(self.home_frame, bg="white")
-        diff_frame.pack(pady=10)
-        diff_label = tk.Label(diff_frame, text="難易度を選択してください：", font=("Arial", 12, "bold"), fg=self.COLOR_ORANGE, bg="white")
-        diff_label.pack(pady=(0, 15))
-        btn_diff_frame = tk.Frame(diff_frame, bg="white")
-        btn_diff_frame.pack()
+        self.root.title("Reversi - Othello")
 
-        self.btn_easy = tk.Button(btn_diff_frame, text="かんたん", font=("Arial", 11, "bold"), bg="white", fg=self.COLOR_ORANGE, activebackground="white", activeforeground=self.COLOR_ORANGE, bd=2, relief="raised", padx=10, pady=5, command=lambda: self.select_difficulty_on_home(ai_easy, "かんたん"))
-        self.btn_normal = tk.Button(btn_diff_frame, text="ふつう", font=("Arial", 11, "bold"), bg="white", fg=self.COLOR_ORANGE, activebackground="white", activeforeground=self.COLOR_ORANGE, bd=2, relief="raised", padx=10, pady=5, command=lambda: self.select_difficulty_on_home(ai_normal, "ふつう"))
-        self.btn_hard = tk.Button(btn_diff_frame, text="むずかしい", font=("Arial", 11, "bold"), bg="white", fg=self.COLOR_ORANGE, activebackground="white", activeforeground=self.COLOR_ORANGE, bd=2, relief="raised", padx=10, pady=5, command=lambda: self.select_difficulty_on_home(ai_hard, "むずかしい"))
-        self.btn_death = tk.Button(btn_diff_frame, text="デス", font=("Arial", 11, "bold"), bg="white", fg=self.COLOR_ORANGE, activebackground="white", activeforeground=self.COLOR_ORANGE, bd=2, relief="raised", padx=10, pady=5, command=lambda: self.select_difficulty_on_home(ai_death, "デス"))
+        self.home_frame = ctk.CTkFrame(
+            self.root,
+            fg_color=self.BG,
+            corner_radius=0
+        )
 
-        self.btn_easy.pack(side="left", padx=5)
-        self.btn_normal.pack(side="left", padx=5)
-        self.btn_hard.pack(side="left", padx=5)
-        self.btn_death.pack(side="left", padx=5)
+        self.home_frame.pack(
+            fill="both",
+            expand=True
+        )
+
+        container = ctk.CTkFrame(
+            self.home_frame,
+            fg_color="transparent"
+        )
+
+        container.pack(
+            expand=True,
+            fill="both",
+            padx=30,
+            pady=30
+        )
+
+        # Logo
+
+        self.create_label(
+            container,
+            "REVERSI",
+            size=15,
+            weight="bold",
+            color=self.PRIMARY
+        ).pack(pady=(20, 8))
+
+        self.create_label(
+            container,
+            "リバーシ / オセロ",
+            size=34,
+            weight="bold"
+        ).pack(pady=5)
+
+        self.create_label(
+            container,
+            "黒のプレイヤーとして、AIとの対戦を楽しもう。",
+            size=14,
+            color=self.SUBTEXT
+        ).pack(pady=(0, 30))
+
+        # Difficulty card
+
+        card = self.create_card(container)
+
+        card.pack(
+            fill="x",
+            padx=40,
+            pady=10
+        )
+
+        inner = ctk.CTkFrame(
+            card,
+            fg_color="transparent"
+        )
+
+        inner.pack(
+            fill="x",
+            padx=30,
+            pady=25
+        )
+
+        self.create_label(
+            inner,
+            "難易度を選択",
+            size=19,
+            weight="bold"
+        ).pack(anchor="w")
+
+        self.create_label(
+            inner,
+            "対戦するAIの強さを選んでください。",
+            size=12,
+            color=self.SUBTEXT
+        ).pack(
+            anchor="w",
+            pady=(5, 20)
+        )
+
+        difficulty_frame = ctk.CTkFrame(
+            inner,
+            fg_color="transparent"
+        )
+
+        difficulty_frame.pack(fill="x")
+
+        self.difficulty_buttons = {}
+
+        for name, module, description in self.DIFFICULTIES:
+
+            button = ctk.CTkButton(
+                difficulty_frame,
+                text=f"{name}\n{description}",
+                height=85,
+                corner_radius=12,
+                border_width=1,
+                border_color=self.BORDER,
+                fg_color=self.SURFACE_ALT,
+                hover_color=self.PRIMARY_LIGHT,
+                text_color=self.TEXT,
+                font=("Arial", 14, "bold"),
+                command=lambda m=module, n=name:
+                    self.select_difficulty_on_home(m, n)
+            )
+
+            button.pack(
+                side="left",
+                expand=True,
+                fill="x",
+                padx=5
+            )
+
+            self.difficulty_buttons[name] = button
+
         self.update_home_difficulty_buttons()
 
-        start_btn = tk.Button(self.home_frame, text="ゲーム開始", command=self.start_game_from_home, font=("Arial", 14, "bold"), bg="white", fg=self.COLOR_ORANGE, activebackground="white", activeforeground=self.COLOR_ORANGE, bd=2, relief="raised", padx=30, pady=10)
-        start_btn.pack(pady=(50, 10))
+        self.selected_label = self.create_label(
+            inner,
+            f"選択中：{self.difficulty_name}",
+            size=13,
+            weight="bold",
+            color=self.PRIMARY
+        )
 
-    # 難易度選択の処理コード
+        self.selected_label.pack(
+            anchor="w",
+            pady=(18, 0)
+        )
+
+        # Start button
+
+        ctk.CTkButton(
+            container,
+            text="ゲームを開始する  →",
+            height=55,
+            width=260,
+            corner_radius=12,
+            fg_color=self.PRIMARY,
+            hover_color=self.PRIMARY_HOVER,
+            font=("Arial", 16, "bold"),
+            command=self.start_game_from_home
+        ).pack(pady=25)
+
+        self.create_label(
+            container,
+            "YOU : BLACK     VS     AI : WHITE",
+            size=11,
+            weight="bold",
+            color=self.SUBTEXT
+        ).pack(pady=5)
+
     def select_difficulty_on_home(self, ai_module, name):
+
         self.ai = ai_module
         self.difficulty_name = name
+
         self.update_home_difficulty_buttons()
 
-    # 難易度ボタン用のコード
     def update_home_difficulty_buttons(self):
-        for btn, name in [(self.btn_easy, "かんたん"), (self.btn_normal, "ふつう"), (self.btn_hard, "むずかしい"), (self.btn_death, "デス")]:
-            if self.difficulty_name == name:
-                btn.config(bg="#FFF0E5", fg=self.COLOR_DARK_ORANGE, relief="sunken")
-            else:
-                btn.config(bg="white", fg=self.COLOR_ORANGE, relief="raised")
-    # ホームからゲームを開始するコード
+
+        for name, button in self.difficulty_buttons.items():
+
+            selected = name == self.difficulty_name
+
+            button.configure(
+                fg_color=(
+                    self.PRIMARY_LIGHT
+                    if selected else self.SURFACE_ALT
+                ),
+                border_color=(
+                    self.PRIMARY
+                    if selected else self.BORDER
+                ),
+                border_width=2 if selected else 1,
+                text_color=(
+                    self.PRIMARY_HOVER
+                    if selected else self.TEXT
+                )
+            )
+
+        selected_label = getattr(self, "selected_label", None)
+        if selected_label is not None and selected_label.winfo_exists():
+
+            selected_label.configure(
+                text=f"選択中：{self.difficulty_name}"
+            )
+
     def start_game_from_home(self):
+
         self.clear_frames()
         self.setup_game_screen()
+
         self.is_game_started = True
+
         self.restart_game()
 
-    # ゲーム画面のセットアップコード
+    # ======================================
+    # Game Screen
+    # ======================================
+
     def setup_game_screen(self):
-        self.game_frame = tk.Frame(self.main_frame, bg="white")
-        self.game_frame.pack(expand=True, fill="both")
-        self.header_frame = tk.Frame(self.game_frame, bg="white", pady=5)
-        self.header_frame.grid(row=0, column=0, sticky="ew")
 
-        # 確認を挟まず、押したらダイレクトにshow_home_screenを呼ぶように修正
-        self.btn_home = tk.Button(self.header_frame, text="ホームへ戻る", font=("Arial", 10, "bold"), bg="white", fg=self.COLOR_ORANGE, activebackground="white", activeforeground=self.COLOR_ORANGE, command=self.show_home_screen)
-        self.btn_home.pack(side="left", padx=10)
+        self.game_frame = ctk.CTkFrame(
+            self.root,
+            fg_color=self.BG,
+            corner_radius=0
+        )
 
-        info_label = tk.Label(self.header_frame, text=f"難易度: {self.difficulty_name}", font=("Arial", 11, "bold"), fg=self.COLOR_ORANGE, bg="white")
-        info_label.pack(side="right", padx=15)
-        self.canvas = tk.Canvas(self.game_frame, bg="#1e1e1e", highlightthickness=0)
-        self.canvas.grid(row=1, column=0, sticky="nsew")
-        self.canvas.bind("<Button-1>", self.click)
-        self.canvas.bind("<Configure>", self.on_resize)
+        self.game_frame.pack(
+            fill="both",
+            expand=True
+        )
 
-        self.game_frame.rowconfigure(1, weight=1)
-        self.game_frame.columnconfigure(0, weight=1)
+        # Top bar
 
-    # 盤面のフレームをクリアするコード
-    def clear_frames(self):
-        if self.home_frame: self.home_frame.destroy(); self.home_frame = None
-        if self.game_frame: self.game_frame.destroy(); self.game_frame = None
+        header = ctk.CTkFrame(
+            self.game_frame,
+            fg_color=self.SURFACE,
+            height=70,
+            corner_radius=0
+        )
 
-    # 盤面のリサイズ処理コード
+        header.pack(fill="x")
+        header.pack_propagate(False)
+
+        self.create_label(
+            header,
+            "REVERSI",
+            size=18,
+            weight="bold",
+            color=self.PRIMARY
+        ).pack(
+            side="left",
+            padx=(25, 18)
+        )
+
+        self.create_label(
+            header,
+            f"難易度：{self.difficulty_name}",
+            size=13,
+            color=self.SUBTEXT
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            header,
+            text="もう一度遊ぶ",
+            width=135,
+            height=38,
+            corner_radius=10,
+            fg_color=self.PRIMARY,
+            hover_color=self.PRIMARY_HOVER,
+            font=("Arial", 12, "bold"),
+            command=self.restart_game
+        ).pack(side="right", padx=(5, 15))
+
+        ctk.CTkButton(
+            header,
+            text="ホームに戻る",
+            width=135,
+            height=38,
+            corner_radius=10,
+            fg_color=self.SURFACE,
+            hover_color=self.PRIMARY_LIGHT,
+            text_color=self.TEXT,
+            border_width=1,
+            border_color=self.BORDER,
+            font=("Arial", 12, "bold"),
+            command=self.show_home_screen
+        ).pack(side="right", padx=5)
+
+        # Main board area
+        # Canvas occupies the entire central area.
+        # The board itself is centered inside the Canvas.
+
+        self.canvas = tk.Canvas(
+            self.game_frame,
+            bg=self.BG,
+            highlightthickness=0,
+            bd=0
+        )
+
+        self.canvas.pack(
+            fill="both",
+            expand=True,
+            padx=10,
+            pady=5
+        )
+
+        self.canvas.bind(
+            "<Button-1>",
+            self.click
+        )
+
+        self.canvas.bind(
+            "<Configure>",
+            self.on_resize
+        )
+
+        # Bottom information panel
+
+        footer = ctk.CTkFrame(
+            self.game_frame,
+            fg_color=self.SURFACE,
+            height=115,
+            corner_radius=0
+        )
+
+        footer.pack(fill="x")
+        footer.pack_propagate(False)
+
+        footer.grid_columnconfigure(0, weight=1)
+        footer.grid_columnconfigure(1, weight=2)
+        footer.grid_columnconfigure(2, weight=1)
+
+        # Black score
+
+        black_box = ctk.CTkFrame(
+            footer,
+            fg_color="transparent"
+        )
+
+        black_box.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=20,
+            pady=10
+        )
+
+        self.create_label(
+            black_box,
+            "●  BLACK",
+            size=12,
+            weight="bold",
+            color=self.SUBTEXT
+        ).pack()
+
+        self.black_score = self.create_label(
+            black_box,
+            "2",
+            size=28,
+            weight="bold"
+        )
+
+        self.black_score.pack()
+
+        # Turn information
+
+        turn_box = ctk.CTkFrame(
+            footer,
+            fg_color="transparent"
+        )
+
+        turn_box.grid(
+            row=0,
+            column=1,
+            sticky="nsew",
+            padx=10,
+            pady=10
+        )
+
+        self.turn_label = self.create_label(
+            turn_box,
+            "● あなたの番",
+            size=17,
+            weight="bold",
+            color=self.PRIMARY
+        )
+
+        self.turn_label.pack(pady=(8, 2))
+
+        self.status_label = self.create_label(
+            turn_box,
+            "置ける場所を選択してください。",
+            size=12,
+            color=self.SUBTEXT
+        )
+
+        self.status_label.pack()
+
+        # White score
+
+        white_box = ctk.CTkFrame(
+            footer,
+            fg_color="transparent"
+        )
+
+        white_box.grid(
+            row=0,
+            column=2,
+            sticky="nsew",
+            padx=20,
+            pady=10
+        )
+
+        self.create_label(
+            white_box,
+            "○  WHITE",
+            size=12,
+            weight="bold",
+            color=self.SUBTEXT
+        ).pack()
+
+        self.white_score = self.create_label(
+            white_box,
+            "2",
+            size=28,
+            weight="bold"
+        )
+
+        self.white_score.pack()
+
+    # ======================================
+    # Board Drawing
+    # ======================================
+
     def on_resize(self, event):
-        if not self.canvas: return
-        self.cell_size = max(min(event.width, event.height) // self.ai.BOARD_SIZE, 10)
-        board_total_size = self.cell_size * self.ai.BOARD_SIZE
-        self.offset_x = (event.width - board_total_size) // 2
-        self.offset_y = (event.height - board_total_size) // 2
+
+        if not self.canvas:
+            return
+
+        size = self.ai.BOARD_SIZE
+
+        available = min(
+            event.width,
+            event.height
+        )
+
+        self.cell_size = max(
+            available // size,
+            10
+        )
+
+        board_size = self.cell_size * size
+
+        # Center the board horizontally and vertically.
+
+        self.offset_x = (
+            event.width - board_size
+        ) // 2
+
+        self.offset_y = (
+            event.height - board_size
+        ) // 2
+
         self.draw_board()
 
-    # 盤面の描画コード（表示漏れ対策の強制リフレッシュを導入）
     def draw_board(self):
-        if not self.canvas: return
-        if self.board is None or isinstance(self.board, bool): return
+
+        if self.canvas is None or self.board is None:
+            return
 
         self.canvas.delete("all")
-        board_total_size = self.cell_size * self.ai.BOARD_SIZE
-        self.canvas.create_rectangle(self.offset_x, self.offset_y, self.offset_x + board_total_size, self.offset_y + board_total_size, fill="darkgreen", outline="")
 
-        # 常に最新の合法手（おける場所）を同期して取得
-        legal_moves = self.ai.get_legal_moves(self.board, self.current_player)
+        size = self.ai.BOARD_SIZE
+        total = self.cell_size * size
 
-        for i in range(self.ai.BOARD_SIZE):
-            for j in range(self.ai.BOARD_SIZE):
-                x1, y1 = self.offset_x + j * self.cell_size, self.offset_y + i * self.cell_size
-                x2, y2 = x1 + self.cell_size, y1 + self.cell_size
-                self.canvas.create_rectangle(x1, y1, x2, y2, outline="black")
-                padding = max(self.cell_size // 12, 2)
+        x0 = self.offset_x
+        y0 = self.offset_y
 
-                if self.board[i, j] == self.ai.BLACK:
-                    self.canvas.create_oval(x1+padding, y1+padding, x2-padding, y2-padding, fill="black")
-                elif self.board[i, j] == self.ai.WHITE:
-                    self.canvas.create_oval(x1+padding, y1+padding, x2-padding, y2-padding, fill="white")
-                # あなたの番（黒）、かつAI思考待ちでなく、ゲーム中の場合にガイドを描画
-                elif (i, j) in legal_moves and self.current_player == self.ai.BLACK and not self.is_waiting and not self.game_over:
-                    radius = max(self.cell_size // 8, 4)
-                    cx, cy = x1 + self.cell_size // 2, y1 + self.cell_size // 2
-                    self.canvas.create_oval(cx - radius, cy - radius, cx + radius, cy + radius, fill="#55aa55", outline="")
+        # Board background
 
-        b_cnt, w_cnt = self.ai.count_pieces(self.board)
-        self.root.title(f"オセロ - {'黒（人間）●' if self.current_player == self.ai.BLACK else '白（AI）○'}の番 [{b_cnt}:{w_cnt}]")
+        self.canvas.create_rectangle(
+            x0,
+            y0,
+            x0 + total,
+            y0 + total,
+            fill=self.BOARD,
+            outline="#206F50",
+            width=2
+        )
 
-        if hasattr(self, '_current_msg') and self._current_msg:
-            self._render_message_text(self._current_msg)
+        # Legal moves
+
+        legal_moves = []
+
+        if not self.game_over and not self.is_waiting:
+
+            legal_moves = self.ai.get_legal_moves(
+                self.board,
+                self.current_player
+            )
+
+        # Draw cells and pieces
+
+        for row in range(size):
+
+            for col in range(size):
+
+                x1 = x0 + col * self.cell_size
+                y1 = y0 + row * self.cell_size
+
+                x2 = x1 + self.cell_size
+                y2 = y1 + self.cell_size
+
+                self.canvas.create_rectangle(
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    outline=self.BOARD_LINE,
+                    width=1
+                )
+
+                padding = max(
+                    self.cell_size // 12,
+                    3
+                )
+
+                cx = (x1 + x2) / 2
+                cy = (y1 + y2) / 2
+
+                piece = self.board[row, col]
+
+                if piece == self.ai.BLACK:
+
+                    self.draw_piece(
+                        cx,
+                        cy,
+                        padding,
+                        self.BLACK
+                    )
+
+                elif piece == self.ai.WHITE:
+
+                    self.draw_piece(
+                        cx,
+                        cy,
+                        padding,
+                        self.WHITE
+                    )
+
+                elif (
+                    (row, col) in legal_moves
+                    and self.current_player == self.ai.BLACK
+                ):
+
+                    radius = max(
+                        self.cell_size // 10,
+                        4
+                    )
+
+                    self.canvas.create_oval(
+                        cx - radius,
+                        cy - radius,
+                        cx + radius,
+                        cy + radius,
+                        fill=self.LEGAL,
+                        outline=""
+                    )
+
+        # Update score
+
+        black, white = self.ai.count_pieces(
+            self.board
+        )
+
+        self.black_score.configure(text=str(black))
+        self.white_score.configure(text=str(white))
+
+        # Update turn
 
         if self.game_over:
-            self.show_end_message()
 
-        # 画面描画の遅延タスクを今すぐ強制処理し、描画漏れを確実に防ぐ
-        self.root.update_idletasks()
-    # メッセージ表示の時間・状態の管理コード
-    def show_message(self, text):
-        if not self.canvas: return
-        self._current_msg = text
-        self._render_message_text(text)
-        def clear_msg():
-            self._current_msg = None
-            if self.canvas: self.canvas.delete("msg")
-        self.root.after(800, clear_msg)
+            turn = "■ ゲーム終了"
+            color = self.SUBTEXT
 
-    # メッセージ表示の見た目の描画コード
-    def _render_message_text(self, text):
-        center_x, center_y = self.canvas.winfo_width() // 2, self.canvas.winfo_height() // 2
-        font_size = max(self.cell_size // 3, 10)
-        msg_w = max(len(text) * font_size, 120)
-        self.canvas.create_rectangle(center_x - msg_w, center_y - 30, center_x + msg_w, center_y + 30, fill="black", outline=self.COLOR_ORANGE, width=2, tags="msg")
-        self.canvas.create_text(center_x, center_y, text=text, fill=self.COLOR_ORANGE, font=("Arial", font_size, "bold"), anchor="center", tags="msg")
+        elif self.is_waiting:
 
-    # ゲーム終了時のメッセージ表示コード
-    def show_end_message(self):
-        if not self.canvas: return
-        black_count, white_count = self.ai.count_pieces(self.board)
-        is_player_win = black_count > white_count
+            if self.current_player == self.ai.WHITE:
+                turn = "◉ AI 思考中..."
+            else:
+                turn = "◉ 処理中..."
 
-        if is_player_win:
-            result_text = f"プレイヤー（黒）の勝ち！\n{black_count} vs {white_count}"
-            box_width = 220
-        elif white_count > black_count:
-            result_text = f"AI（白）の勝ち！\n{black_count} vs {white_count}"
-            box_width = 220
+            color = self.PRIMARY
+
+        elif self.current_player == self.ai.BLACK:
+
+            turn = "● あなたの番"
+            color = self.PRIMARY
+
         else:
-            result_text = f"引き分け！\n{black_count} vs {white_count}"
-            box_width = 220
 
-        # パーティクルアニメーションの初期化コード
-        if is_player_win and (not hasattr(self, 'particles') or not self.particles):
-            import random
-            self.particles = []
-            colors = ["#FF5F1F", "#FFD700", "#00FF7F", "#1E90FF", "#FF69B4", "#00FFFF"]
-            w, h = self.canvas.winfo_width(), self.canvas.winfo_height()
-            for _ in range(70):
-                self.particles.append({
-                    "x": random.randint(10, w - 10),
-                    "y": random.randint(-50, 0),
-                    "vx": random.uniform(-2, 2),
-                    "vy": random.uniform(1, 4),
-                    "color": random.choice(colors),
-                    "size": random.randint(4, 8)
-                })
-            self.animate_particles()
+            turn = "○ AI の番"
+            color = self.SUBTEXT
 
-        # 結果表示のコード
-        center_x, center_y = self.canvas.winfo_width() // 2, self.canvas.winfo_height() // 2
-        font_size = max(self.cell_size // 5, 10)
+        self.turn_label.configure(
+            text=turn,
+            text_color=color
+        )
 
-        self.canvas.create_rectangle(center_x - box_width, center_y - 70, center_x + box_width, center_y + 70, fill="black", outline=self.COLOR_ORANGE, width=2, tags="ui_end")
-        self.canvas.create_text(center_x, center_y - 20, text=result_text, fill=self.COLOR_ORANGE, font=("Arial", font_size, "bold"), anchor="center", justify="center", tags="ui_end")
+        self.root.title(
+            f"Reversi | {black} : {white}"
+        )
 
-        if self.restart_btn is None:
-            self.restart_btn = tk.Button(self.canvas, text="もう一度遊ぶ", command=self.restart_game, font=("Arial", 11, "bold"), bg="white", fg=self.COLOR_ORANGE, activebackground="white", activeforeground=self.COLOR_ORANGE, bd=0, relief="flat")
-            self.canvas.create_window(center_x - 65, center_y + 35, window=self.restart_btn, tags="restart_tag")
+        # Re-render overlays after redraw or resize.
 
-        if self.end_home_btn is None:
-            self.end_home_btn = tk.Button(self.canvas, text="ホームへ戻る", command=self.show_home_screen, font=("Arial", 11, "bold"), bg="white", fg=self.COLOR_ORANGE, activebackground="white", activeforeground=self.COLOR_ORANGE, bd=0, relief="flat")
-            self.canvas.create_window(center_x + 65, center_y + 35, window=self.end_home_btn, tags="end_home_tag")
+        if self.game_over:
+            self.render_result_overlay()
+        elif self.pass_overlay_data:
+            self.render_pass_overlay()
 
-    # パーティクルアニメーションのコード
-    def animate_particles(self):
-        if not self.game_over or not self.canvas: return
-        self.canvas.delete("particle")
-        h = self.canvas.winfo_height()
-        still_running = False
+    def draw_piece(self, cx, cy, padding, color):
 
-        if hasattr(self, 'particles') and self.particles:
-            for p in self.particles:
-                p["x"] += p["vx"]
-                p["y"] += p["vy"]
-                p["vy"] += 0.05
+        x1 = cx - self.cell_size / 2 + padding
+        y1 = cy - self.cell_size / 2 + padding
 
-                if p["y"] < h:
-                    still_running = True
-                    self.canvas.create_rectangle(p["x"], p["y"], p["x"]+p["size"], p["y"]+p["size"], fill=p["color"], outline="", tags="particle")
+        x2 = cx + self.cell_size / 2 - padding
+        y2 = cy + self.cell_size / 2 - padding
 
-        self.canvas.tag_raise("ui_end")
-        self.canvas.tag_raise("restart_tag")
-        self.canvas.tag_raise("end_home_tag")
+        # Shadow
 
-        if still_running:
-            self.root.after(30, self.animate_particles)
+        self.canvas.create_oval(
+            x1 + 2,
+            y1 + 3,
+            x2 + 2,
+            y2 + 3,
+            fill="#15523B",
+            outline=""
+        )
 
-    # ゲームを再起動するコード
-    def restart_game(self):
-        self._current_msg = None
-        if hasattr(self, 'particles'): self.particles = []
+        outline = (
+            "#D1D5DB"
+            if color == self.WHITE
+            else "#101820"
+        )
 
-        if self.restart_btn: self.restart_btn.destroy(); self.restart_btn = None
-        if self.end_home_btn: self.end_home_btn.destroy(); self.end_home_btn = None
+        self.canvas.create_oval(
+            x1,
+            y1,
+            x2,
+            y2,
+            fill=color,
+            outline=outline,
+            width=1
+        )
+
+    # ======================================
+    # PASS Overlay
+    # ======================================
+
+    def show_pass_overlay(self, player):
+
+        if not self.canvas:
+            return
+
+        self.hide_pass_overlay()
+
+        if player == self.ai.BLACK:
+
+            subtitle = "あなたの番はスキップされました"
+            color = self.PRIMARY
+
+        else:
+
+            subtitle = "AIの番はスキップされました"
+            color = "#64748B"
+
+        self.pass_overlay_data = {
+            "title": "PASS",
+            "subtitle": subtitle,
+            "color": color
+        }
+
+        self.render_pass_overlay()
+
+        self.pass_after_id = self.root.after(
+            1500,
+            self.hide_pass_overlay
+        )
+
+    def render_pass_overlay(self):
+
+        if not self.canvas or not self.pass_overlay_data:
+            return
+
+        self.canvas.delete("pass_overlay")
+
+        width = self.canvas.winfo_width()
+        height = self.canvas.winfo_height()
+
+        cx = width // 2
+        cy = height // 2
+
+        data = self.pass_overlay_data
+        color = data["color"]
+
+        # Overlay background
+
+        box_width = 340
+        box_height = 180
+
+        x1 = cx - box_width // 2
+        y1 = cy - box_height // 2
+        x2 = cx + box_width // 2
+        y2 = cy + box_height // 2
+
+        # Shadow
+
+        self.canvas.create_rectangle(
+            x1 + 5,
+            y1 + 6,
+            x2 + 5,
+            y2 + 6,
+            fill="#CBD5E1",
+            outline="",
+            tags="pass_overlay"
+        )
+
+        # Main card
+
+        self.canvas.create_rectangle(
+            x1,
+            y1,
+            x2,
+            y2,
+            fill="#FFFFFF",
+            outline=color,
+            width=3,
+            tags="pass_overlay"
+        )
+
+        # PASS icon
+
+        self.canvas.create_text(
+            cx,
+            cy - 48,
+            text="⏭",
+            font=("Arial", 30),
+            fill=color,
+            tags="pass_overlay"
+        )
+
+        # PASS title
+
+        self.canvas.create_text(
+            cx,
+            cy - 5,
+            text=data["title"],
+            font=("Arial", 32, "bold"),
+            fill=color,
+            tags="pass_overlay"
+        )
+
+        # Description
+
+        self.canvas.create_text(
+            cx,
+            cy + 48,
+            text=data["subtitle"],
+            font=("Arial", 13, "bold"),
+            fill=self.SUBTEXT,
+            tags="pass_overlay"
+        )
+
+        self.canvas.tag_raise("pass_overlay")
+
+    def hide_pass_overlay(self):
+
+        if self.pass_after_id is not None:
+
+            try:
+                self.root.after_cancel(
+                    self.pass_after_id
+                )
+            except tk.TclError:
+                pass
+
+            self.pass_after_id = None
 
         if self.canvas:
-            self.canvas.delete("restart_tag")
-            self.canvas.delete("end_home_tag")
-            self.canvas.delete("particle")
-            self.canvas.delete("ui_end")
+            self.canvas.delete("pass_overlay")
 
-        if hasattr(self, 'btn_home') and self.btn_home:
-            self.btn_home.config(state="normal")
+        self.pass_overlay_data = None
+
+    # ======================================
+    # Messages
+    # ======================================
+
+    def show_message(self, text):
+
+        if not self.status_label.winfo_exists():
+            return
+
+        if self.message_after_id is not None:
+
+            self.root.after_cancel(
+                self.message_after_id
+            )
+
+        self.status_label.configure(
+            text=text,
+            text_color=self.PRIMARY
+        )
+
+        self.message_after_id = self.root.after(
+            1800,
+            self.clear_message
+        )
+
+    def clear_message(self):
+
+        self.message_after_id = None
+
+        if self.status_label.winfo_exists():
+
+            self.status_label.configure(
+                text="置ける場所を選択してください。",
+                text_color=self.SUBTEXT
+            )
+
+    # ======================================
+    # Game Management
+    # ======================================
+
+    def restart_game(self):
+
+        self.game_token += 1
+
+        self.cancel_scheduled_tasks()
+        self.clear_ai_queue()
 
         self.board = self.ai.init_board()
+
         self.current_player = self.ai.BLACK
+
         self.game_over = False
         self.is_waiting = False
+        self.ai_turn_active = False
+
+        self.hide_result_overlay()
+
+        self.status_label.configure(
+            text="置ける場所を選択してください。",
+            text_color=self.SUBTEXT
+        )
+
         self.draw_board()
 
-    # クリックイベントの処理コード
-    def click(self, event):
-        if self.current_player != self.ai.BLACK or self.game_over or self.is_waiting: return
-
-        click_x, click_y = event.x - self.offset_x, event.y - self.offset_y
-        row, col = click_y // self.cell_size, click_x // self.cell_size
-        if not (0 <= row < self.ai.BOARD_SIZE and 0 <= col < self.ai.BOARD_SIZE): return
-
-        if (row, col) in self.ai.get_legal_moves(self.board, self.current_player):
-            res = self.ai.make_move(self.board, row, col, self.current_player)
-            if res is not None and not isinstance(res, bool):
-                self.board = res
-
-            self.current_player = self.ai.WHITE
-            self.is_waiting = True
-            self.draw_board()
-            self.root.after(200, self.check_turn_and_run)
-
-    # AIの手を計算して適用するコード
-    def ai_move(self):
-        def th_target():
-            move = self.ai.select_ai_move(self.board, self.ai.WHITE)
-            self.root.after(0, self.apply_ai_move, move)
-        threading.Thread(target=th_target, daemon=True).start()
-
-    # AIの手を適用するコード
-    def apply_ai_move(self, move):
-        if move:
-            row, col = move
-            res = self.ai.make_move(self.board, row, col, self.ai.WHITE)
-            if res is not None and not isinstance(res, bool):
-                self.board = res
-
-        self.current_player = self.ai.BLACK
-        self.is_waiting = False
-        self.draw_board()
-        self.root.after(200, self.check_turn_and_run)
-
-    # AIがパスする時用のコード
-    def resume_after_pass(self, next_player):
-        self.is_waiting = False
-        self.current_player = next_player
-        self.draw_board()
         self.check_turn_and_run()
 
-    # ゲームのターンをチェックして進行するコード
-    def check_turn_and_run(self):
-        if self.board is None or isinstance(self.board, bool): return
+    # ======================================
+    # Player Input
+    # ======================================
 
-        black_count, white_count = self.ai.count_pieces(self.board)
-        if black_count == 0 or white_count == 0:
-            self.game_over = True
+    def click(self, event):
+
+        if (
+            self.current_player != self.ai.BLACK
+            or self.game_over
+            or self.is_waiting
+            or self.board is None
+        ):
+            return
+
+        click_x = event.x - self.offset_x
+        click_y = event.y - self.offset_y
+
+        row = click_y // self.cell_size
+        col = click_x // self.cell_size
+
+        if not (
+            0 <= row < self.ai.BOARD_SIZE
+            and 0 <= col < self.ai.BOARD_SIZE
+        ):
+            return
+
+        legal_moves = self.ai.get_legal_moves(
+            self.board,
+            self.ai.BLACK
+        )
+
+        if (row, col) not in legal_moves:
+            return
+
+        result = self.ai.make_move(
+            self.board,
+            row,
+            col,
+            self.ai.BLACK
+        )
+
+        if result is not None and not isinstance(result, bool):
+            self.board = result
+
+        self.current_player = self.ai.WHITE
+        self.is_waiting = True
+
+        self.draw_board()
+
+        self.ai_after_id = self.root.after(
+            200,
+            self.check_turn_and_run
+        )
+
+    # ======================================
+    # AI
+    # ======================================
+
+    def ai_move(self):
+
+        if (
+            self.game_over
+            or self.board is None
+            or self.current_player != self.ai.WHITE
+            or not self.ai_turn_active
+        ):
+            return
+
+        self.is_waiting = True
+
+        token = self.game_token
+
+        board_snapshot = self.board.copy()
+
+        def worker():
+
+            try:
+
+                move = self.ai.select_ai_move(
+                    board_snapshot,
+                    self.ai.WHITE
+                )
+
+                self.ai_queue.put(
+                    (token, "success", move)
+                )
+
+            except Exception as error:
+
+                self.ai_queue.put(
+                    (token, "error", str(error))
+                )
+
+        threading.Thread(
+            target=worker,
+            daemon=True
+        ).start()
+
+        self.root.after(
+            50,
+            self.poll_ai_result,
+            token
+        )
+
+    def poll_ai_result(self, token):
+
+        if token != self.game_token or self.game_over:
+            return
+
+        try:
+
+            result_token, result_type, result = (
+                self.ai_queue.get_nowait()
+            )
+
+        except queue.Empty:
+
+            self.root.after(
+                50,
+                self.poll_ai_result,
+                token
+            )
+            return
+
+        if result_token != token:
+            self.root.after(
+                50,
+                self.poll_ai_result,
+                token
+            )
+            return
+
+        if result_type == "error":
+
+            self.ai_turn_active = False
+            self.is_waiting = False
+
+            self.show_message(
+                f"AIエラー: {result}"
+            )
+
             self.draw_board()
             return
 
-        if self.game_over: return
-        human_moves = self.ai.get_legal_moves(self.board, self.ai.BLACK)
-        ai_moves = self.ai.get_legal_moves(self.board, self.ai.WHITE)
-        if not human_moves and not ai_moves: self.game_over = True; self.draw_board(); return
+        self.apply_ai_move(result)
+
+    def apply_ai_move(self, move):
+
+        if (
+            self.game_over
+            or self.current_player != self.ai.WHITE
+            or not self.ai_turn_active
+        ):
+            return
+
+        self.ai_turn_active = False
+
+        if move is not None:
+
+            row, col = move
+
+            result = self.ai.make_move(
+                self.board,
+                row,
+                col,
+                self.ai.WHITE
+            )
+
+            if result is not None and not isinstance(result, bool):
+                self.board = result
+
+        self.current_player = self.ai.BLACK
+        self.is_waiting = False
+
+        self.draw_board()
+
+        self.ai_after_id = self.root.after(
+            200,
+            self.check_turn_and_run
+        )
+
+    # ======================================
+    # Pass / Turn Management
+    # ======================================
+
+    def resume_after_pass(self, next_player):
+
+        if self.game_over:
+            return
+
+        self.is_waiting = False
+        self.current_player = next_player
+
+        self.draw_board()
+
+        self.check_turn_and_run()
+
+    def check_turn_and_run(self):
+
+        if self.board is None or self.game_over:
+            return
+
+        human_moves = self.ai.get_legal_moves(
+            self.board,
+            self.ai.BLACK
+        )
+
+        ai_moves = self.ai.get_legal_moves(
+            self.board,
+            self.ai.WHITE
+        )
+
+        # Game over
+
+        if not human_moves and not ai_moves:
+
+            self.game_over = True
+            self.is_waiting = False
+            self.ai_turn_active = False
+
+            self.draw_board()
+            self.show_end_message()
+
+            return
+
+        # AI turn
 
         if self.current_player == self.ai.WHITE:
+
             if ai_moves:
+
+                if self.ai_turn_active:
+                    return
+
+                self.ai_turn_active = True
                 self.is_waiting = True
-                self.root.after(500, self.ai_move)
+                self.draw_board()
+
+                self.ai_after_id = self.root.after(
+                    400,
+                    self.ai_move
+                )
+
             else:
-                self.show_message("白（AI）パス")
+
                 self.is_waiting = True
-                self.root.after(800, lambda: self.resume_after_pass(self.ai.BLACK))
+                self.draw_board()
+
+                self.show_pass_overlay(
+                    self.ai.WHITE
+                )
+
+                self.ai_after_id = self.root.after(
+                    1500,
+                    lambda: self.resume_after_pass(
+                        self.ai.BLACK
+                    )
+                )
+
+        # Human turn
+
         elif self.current_player == self.ai.BLACK:
+
             if not human_moves:
-                self.show_message("黒（人間）パス")
+
                 self.is_waiting = True
-                self.root.after(800, lambda: self.resume_after_pass(self.ai.WHITE))
+                self.draw_board()
+
+                self.show_pass_overlay(
+                    self.ai.BLACK
+                )
+
+                self.ai_after_id = self.root.after(
+                    1500,
+                    lambda: self.resume_after_pass(
+                        self.ai.WHITE
+                    )
+                )
+
             else:
+
                 self.is_waiting = False
                 self.draw_board()
 
-# メインループ
+    # ======================================
+    # Game Result
+    # ======================================
+
+    def show_end_message(self):
+
+        if self.board is None or not self.canvas:
+            return
+
+        black, white = self.ai.count_pieces(self.board)
+
+        if black > white:
+            result = "YOU WIN!"
+            detail = "プレイヤー（黒）の勝利です。"
+        elif white > black:
+            result = "AI WINS!"
+            detail = "AI（白）の勝利です。"
+        else:
+            result = "DRAW!"
+            detail = "引き分けです。"
+
+        self.turn_label.configure(
+            text="■ ゲーム終了",
+            text_color=self.PRIMARY
+        )
+        self.status_label.configure(
+            text="対戦結果が確定しました。",
+            text_color=self.SUBTEXT
+        )
+
+        self.hide_result_overlay()
+        self.result_overlay_data = {
+            "result": result,
+            "detail": detail,
+            "score": f"{black} : {white}"
+        }
+
+        # Draw the white panel and orange border in one Canvas shape so both
+        # follow the same rounded outline.
+        buttons = ctk.CTkFrame(
+            self.game_frame,
+            fg_color=self.SURFACE,
+            corner_radius=0
+        )
+        self.result_overlay = buttons
+
+        ctk.CTkButton(
+            buttons,
+            text="ホームに戻る",
+            width=140,
+            height=40,
+            corner_radius=10,
+            fg_color=self.SURFACE,
+            hover_color=self.PRIMARY_LIGHT,
+            text_color=self.TEXT,
+            border_width=1,
+            border_color=self.BORDER,
+            command=self.show_home_screen
+        ).pack(side="left", padx=6)
+
+        ctk.CTkButton(
+            buttons,
+            text="もう一度遊ぶ",
+            width=140,
+            height=40,
+            corner_radius=10,
+            fg_color=self.PRIMARY,
+            hover_color=self.PRIMARY_HOVER,
+            command=self.restart_game
+        ).pack(side="left", padx=6)
+
+        self.render_result_overlay()
+
+    def render_result_overlay(self):
+
+        if (
+            self.result_overlay is None
+            or not self.result_overlay.winfo_exists()
+            or self.canvas is None
+            or self.result_overlay_data is None
+        ):
+            return
+
+        self.canvas.delete("result_overlay")
+
+        width = self.canvas.winfo_width()
+        height = self.canvas.winfo_height()
+        cx = width / 2
+        cy = height / 2
+        box_width = 440
+        box_height = 210
+        radius = 22
+        left = cx - box_width / 2
+        right = cx + box_width / 2
+        top = cy - box_height / 2
+        bottom = cy + box_height / 2
+
+        points = []
+        corners = (
+            (right - radius, top + radius, -90, 0),
+            (right - radius, bottom - radius, 0, 90),
+            (left + radius, bottom - radius, 90, 180),
+            (left + radius, top + radius, 180, 270),
+        )
+        for corner_x, corner_y, start_angle, end_angle in corners:
+            for step in range(13):
+                angle = start_angle + (end_angle - start_angle) * step / 12
+                radians = math.radians(angle)
+                points.extend((
+                    corner_x + radius * math.cos(radians),
+                    corner_y + radius * math.sin(radians)
+                ))
+
+        self.canvas.create_polygon(
+            *points,
+            fill=self.SURFACE,
+            outline=self.PRIMARY,
+            width=3,
+            tags="result_overlay"
+        )
+        self.canvas.create_text(
+            cx,
+            cy - 45,
+            text=self.result_overlay_data["result"],
+            font=("Arial", 30, "bold"),
+            fill=self.PRIMARY,
+            tags="result_overlay"
+        )
+        self.canvas.create_text(
+            cx,
+            cy - 4,
+            text=(
+                f"{self.result_overlay_data['detail']}  "
+                f"{self.result_overlay_data['score']}"
+            ),
+            font=("Arial", 14, "bold"),
+            fill=self.TEXT,
+            tags="result_overlay"
+        )
+
+        center_x = self.canvas.winfo_x() + cx
+        center_y = self.canvas.winfo_y() + cy + 58
+        self.result_overlay.place(
+            x=center_x,
+            y=center_y,
+            anchor="center"
+        )
+        self.result_overlay.lift()
+
+    def hide_result_overlay(self):
+
+        if self.canvas is not None:
+            self.canvas.delete("result_overlay")
+
+        if self.result_overlay is not None:
+            try:
+                if self.result_overlay.winfo_exists():
+                    self.result_overlay.destroy()
+            except tk.TclError:
+                pass
+            self.result_overlay = None
+
+        self.result_overlay_data = None
+
+
+# ==========================================
+# Main
+# ==========================================
+
 if __name__ == "__main__":
-    root = tk.Tk()
+
+    root = ctk.CTk()
+
     app = OthelloGUI(root)
+
     root.mainloop()
